@@ -16,6 +16,7 @@ const config = {
 
 const client = new Client(config);
 const app = express();
+app.use(express.json());
 
 let db;
 
