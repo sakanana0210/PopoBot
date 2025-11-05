@@ -20,53 +20,67 @@ app.use(express.json());
 
 let db;
 
-// === Webhook 接收訊息 ===
-app.post("/webhook", middleware(config), async (req, res) => {
-  const events = req.body.events;
-  for (let event of events) {
-    if (event.type === "message" && event.message.type === "text") {
-      if (event.message.text.includes("💩")) {
-        const today = new Date().toISOString().slice(0, 10);
-        const userId = event.source.userId || "unknown_user";
-        const groupId = event.source.groupId || null;
+// === Webhook 接收訊息（修正版） ===
+import rawBody from "raw-body"; // npm i raw-body
 
-        let displayName = userId; // 預設顯示 ID
+app.post("/webhook", async (req, res, next) => {
+  try {
+    // 取得原始 body，供 middleware 驗證簽章
+    const buf = await rawBody(req);
+    req.rawBody = buf; // middleware 會用這個
 
-        try {
-          // 嘗試抓使用者名稱
-          if (event.source.type === "user") {
-            const profile = await client.getProfile(userId);
-            displayName = profile.displayName;
-          } else if (event.source.type === "group" && groupId) {
-            const profile = await client.getGroupMemberProfile(groupId, userId);
-            displayName = profile.displayName;
+    // 執行 LINE middleware 驗證簽章
+    middleware(config)(req, res, async () => {
+      const events = req.body.events || [];
+      for (let event of events) {
+        if (event.type === "message" && event.message.type === "text") {
+          if (event.message.text.includes("💩")) {
+            const today = new Date().toISOString().slice(0, 10);
+            const userId = event.source.userId || "unknown_user";
+            const groupId = event.source.groupId || null;
+
+            let displayName = userId; // 預設顯示 ID
+
+            try {
+              if (event.source.type === "user") {
+                const profile = await client.getProfile(userId);
+                displayName = profile.displayName;
+              } else if (event.source.type === "group" && groupId) {
+                const profile = await client.getGroupMemberProfile(groupId, userId);
+                displayName = profile.displayName;
+              }
+            } catch (err) {
+              console.warn("[WARN] 取得使用者名稱失敗，使用 userId:", err.message);
+            }
+
+            try {
+              await db.run(
+                `
+                INSERT INTO poop_log (user_id, group_id, display_name, count_date, count)
+                VALUES (?, ?, ?, ?, 1)
+                ON CONFLICT(user_id, group_id, count_date)
+                DO UPDATE SET count = count + 1
+              `,
+                [userId, groupId, displayName, today]
+              );
+
+              console.log(
+                `[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`
+              );
+            } catch (err) {
+              console.error("[DB ERROR]", err);
+            }
           }
-        } catch (err) {
-          console.warn("[WARN] 取得使用者名稱失敗，使用 userId:", err.message);
-        }
-
-        try {
-          await db.run(
-            `
-            INSERT INTO poop_log (user_id, group_id, display_name, count_date, count)
-            VALUES (?, ?, ?, ?, 1)
-            ON CONFLICT(user_id, group_id, count_date)
-            DO UPDATE SET count = count + 1
-          `,
-            [userId, groupId, displayName, today]
-          );
-
-          console.log(
-            `[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`
-          );
-        } catch (err) {
-          console.error("[DB ERROR]", err);
         }
       }
-    }
+      res.sendStatus(200);
+    });
+  } catch (err) {
+    console.error("[WEBHOOK ERROR]", err);
+    res.sendStatus(500);
   }
-  res.sendStatus(200);
 });
+
 
 // === 排名推播函數 ===
 async function pushRanking(groupId, title, rows) {
