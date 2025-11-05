@@ -5,10 +5,6 @@ import cron from "node-cron";
 import dotenv from "dotenv";
 dotenv.config();
 
-console.log("=== LINE Config ===");
-console.log("LINE_CHANNEL_TOKEN:", process.env.LINE_CHANNEL_TOKEN);
-console.log("LINE_CHANNEL_SECRET:", process.env.LINE_CHANNEL_SECRET);
-
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET,
@@ -16,30 +12,31 @@ const config = {
 
 const client = new Client(config);
 const app = express();
-app.use(express.json());
 
 let db;
 
-// === Webhook 接收訊息（修正版） ===
-import rawBody from "raw-body"; // npm i raw-body
+// === 其他 route 可以正常使用 JSON ===
+app.use(express.json());
 
-app.post("/webhook", async (req, res, next) => {
+// === LINE Webhook ===
+app.post("/webhook", async (req, res) => {
   try {
-    // 取得原始 body，供 middleware 驗證簽章
-    const buf = await rawBody(req);
-    req.rawBody = buf; // middleware 會用這個
+    // 使用 raw-body 取得原始 body
+    const buf = await rawBody(req, { length: req.headers['content-length'], encoding: 'utf-8' });
+    req.rawBody = buf; // middleware 需要這個屬性
 
-    // 執行 LINE middleware 驗證簽章
+    // 執行 middleware 驗證簽章
     middleware(config)(req, res, async () => {
       const events = req.body.events || [];
+      console.log("🌿 收到 webhook:", events);
+
       for (let event of events) {
         if (event.type === "message" && event.message.type === "text") {
           if (event.message.text.includes("💩")) {
             const today = new Date().toISOString().slice(0, 10);
             const userId = event.source.userId || "unknown_user";
             const groupId = event.source.groupId || null;
-
-            let displayName = userId; // 預設顯示 ID
+            let displayName = userId;
 
             try {
               if (event.source.type === "user") {
@@ -60,26 +57,26 @@ app.post("/webhook", async (req, res, next) => {
                 VALUES (?, ?, ?, ?, 1)
                 ON CONFLICT(user_id, group_id, count_date)
                 DO UPDATE SET count = count + 1
-              `,
+                `,
                 [userId, groupId, displayName, today]
               );
 
-              console.log(
-                `[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`
-              );
+              console.log(`[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`);
             } catch (err) {
               console.error("[DB ERROR]", err);
             }
           }
         }
       }
-      res.sendStatus(200);
+
+      res.sendStatus(200); // ✅ 一定要回 200
     });
   } catch (err) {
     console.error("[WEBHOOK ERROR]", err);
-    res.sendStatus(500);
+    res.sendStatus(500); // 如果真的出錯才回 500
   }
 });
+
 
 
 // === 排名推播函數 ===
