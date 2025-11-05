@@ -12,72 +12,64 @@ const config = {
 
 const client = new Client(config);
 const app = express();
-
 let db;
 
-// === 其他 route 可以正常使用 JSON ===
+// === 其他 route 可以用 JSON parser ===
 app.use(express.json());
 
 // === LINE Webhook ===
-app.post("/webhook", async (req, res) => {
-  try {
-    // 使用 raw-body 取得原始 body
-    const buf = await rawBody(req, { length: req.headers['content-length'], encoding: 'utf-8' });
-    req.rawBody = buf; // middleware 需要這個屬性
+app.post(
+  "/webhook",
+  express.raw({ type: "application/json" }), // ✅ 原始 body
+  middleware(config),
+  async (req, res) => {
+    const events = req.body.events || [];
+    console.log("🌿 收到 webhook:", events);
 
-    // 執行 middleware 驗證簽章
-    middleware(config)(req, res, async () => {
-      const events = req.body.events || [];
-      console.log("🌿 收到 webhook:", events);
+    for (let event of events) {
+      if (event.type === "message" && event.message.type === "text") {
+        if (event.message.text.includes("💩")) {
+          const today = new Date().toISOString().slice(0, 10);
+          const userId = event.source.userId || "unknown_user";
+          const groupId = event.source.groupId || null;
+          let displayName = userId;
 
-      for (let event of events) {
-        if (event.type === "message" && event.message.type === "text") {
-          if (event.message.text.includes("💩")) {
-            const today = new Date().toISOString().slice(0, 10);
-            const userId = event.source.userId || "unknown_user";
-            const groupId = event.source.groupId || null;
-            let displayName = userId;
-
-            try {
-              if (event.source.type === "user") {
-                const profile = await client.getProfile(userId);
-                displayName = profile.displayName;
-              } else if (event.source.type === "group" && groupId) {
-                const profile = await client.getGroupMemberProfile(groupId, userId);
-                displayName = profile.displayName;
-              }
-            } catch (err) {
-              console.warn("[WARN] 取得使用者名稱失敗，使用 userId:", err.message);
+          try {
+            if (event.source.type === "user") {
+              const profile = await client.getProfile(userId);
+              displayName = profile.displayName;
+            } else if (event.source.type === "group" && groupId) {
+              const profile = await client.getGroupMemberProfile(groupId, userId);
+              displayName = profile.displayName;
             }
+          } catch (err) {
+            console.warn("[WARN] 取得使用者名稱失敗，使用 userId:", err.message);
+          }
 
-            try {
-              await db.run(
-                `
-                INSERT INTO poop_log (user_id, group_id, display_name, count_date, count)
-                VALUES (?, ?, ?, ?, 1)
-                ON CONFLICT(user_id, group_id, count_date)
-                DO UPDATE SET count = count + 1
-                `,
-                [userId, groupId, displayName, today]
-              );
+          try {
+            await db.run(
+              `
+              INSERT INTO poop_log (user_id, group_id, display_name, count_date, count)
+              VALUES (?, ?, ?, ?, 1)
+              ON CONFLICT(user_id, group_id, count_date)
+              DO UPDATE SET count = count + 1
+              `,
+              [userId, groupId, displayName, today]
+            );
 
-              console.log(`[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`);
-            } catch (err) {
-              console.error("[DB ERROR]", err);
-            }
+            console.log(
+              `[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`
+            );
+          } catch (err) {
+            console.error("[DB ERROR]", err);
           }
         }
       }
+    }
 
-      res.sendStatus(200); // ✅ 一定要回 200
-    });
-  } catch (err) {
-    console.error("[WEBHOOK ERROR]", err);
-    res.sendStatus(500); // 如果真的出錯才回 500
+    res.sendStatus(200); // ✅ 一定要回 200
   }
-});
-
-
+);
 
 // === 排名推播函數 ===
 async function pushRanking(groupId, title, rows) {
