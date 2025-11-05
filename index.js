@@ -121,6 +121,6 @@ cron.schedule("10 0 * * *", async () => { // 每天 00:10 執行
 // === 啟動 server ===
 (async () => {
   db = await initDB();
-  const port = process.env.PORT || 3000;
+  const port = process.env.PORT || 10000;
   app.listen(port, () => console.log(`💩 Bot running on ${port}`));
 })();
