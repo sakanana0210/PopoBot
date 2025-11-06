@@ -12,31 +12,57 @@ const config = {
 
 const client = new Client(config);
 const app = express();
+
 let db;
 
-// ✅ 對 /webhook 只用 express.raw，其他 route 可用 express.json()
-app.use("/webhook", express.raw({ type: "application/json" }));
-app.use(express.json()); // 其他 route
-
-// === Webhook ===
+// === Webhook 接收訊息 ===
 app.post("/webhook", middleware(config), async (req, res) => {
-  try {
-    const events = req.body.events || [];
-    console.log("🌿 收到 webhook:", events);
+  const events = req.body.events;
+  for (let event of events) {
+    if (event.type === "message" && event.message.type === "text") {
+      if (event.message.text.includes("💩")) {
+        const today = new Date().toISOString().slice(0, 10);
+        const userId = event.source.userId || "unknown_user";
+        const groupId = event.source.groupId || null;
 
-    for (let event of events) {
-      if (event.type === "message" && event.message.type === "text") {
-        console.log(`[LOG] 收到訊息: ${event.message.text}`);
-        // 你的 DB 處理邏輯...
+        let displayName = userId; // 預設顯示 ID
+
+        try {
+          // 嘗試抓使用者名稱
+          if (event.source.type === "user") {
+            const profile = await client.getProfile(userId);
+            displayName = profile.displayName;
+          } else if (event.source.type === "group" && groupId) {
+            const profile = await client.getGroupMemberProfile(groupId, userId);
+            displayName = profile.displayName;
+          }
+        } catch (err) {
+          console.warn("[WARN] 取得使用者名稱失敗，使用 userId:", err.message);
+        }
+
+        try {
+          await db.run(
+            `
+            INSERT INTO poop_log (user_id, group_id, display_name, count_date, count)
+            VALUES (?, ?, ?, ?, 1)
+            ON CONFLICT(user_id, group_id, count_date)
+            DO UPDATE SET count = count + 1
+          `,
+            [userId, groupId, displayName, today]
+          );
+
+          console.log(
+            `[LOG] 💩 新增記錄 => userId=${userId}, groupId=${groupId}, displayName=${displayName}, date=${today}`
+          );
+        } catch (err) {
+          console.error("[DB ERROR]", err);
+        }
       }
     }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("[WEBHOOK ERROR]", err);
-    res.sendStatus(500);
   }
+  res.sendStatus(200);
 });
+
 
 // === 排名推播函數 ===
 async function pushRanking(groupId, title, rows) {
