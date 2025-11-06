@@ -16,10 +16,6 @@ const app = express();
 let db;
 
 // === Webhook 接收訊息 ===
-const client = new Client(config);
-const app = express();
-let db;
-
 // ✅ 對 /webhook 只用 express.raw，其他 route 可用 express.json()
 app.use("/webhook", express.raw({ type: "application/json" }));
 app.use(express.json()); // 其他 route
